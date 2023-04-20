@@ -49,7 +49,6 @@ MODULE_PARM_DESC(dev_mem_length, "device memory length");
 
 MODULE_AUTHOR("Urs Graf");
 MODULE_DESCRIPTION("fLink local plus bus module for mpc5200");
-MODULE_SUPPORTED_DEVICE("fLink LPB devices");
 MODULE_LICENSE("Dual BSD/GPL");
 
 /// @brief Local Plus Bus device data

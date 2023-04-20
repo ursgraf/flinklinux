@@ -40,7 +40,6 @@
 
 MODULE_AUTHOR("Martin Zueger <martin@zueger.eu>");
 MODULE_DESCRIPTION("fLink core module");
-MODULE_SUPPORTED_DEVICE("none");
 MODULE_LICENSE("Dual BSD/GPL");
 
 static LIST_HEAD(device_list);

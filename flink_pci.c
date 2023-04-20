@@ -38,7 +38,6 @@
 
 MODULE_AUTHOR("Martin Zueger <martin@zueger.eu>");
 MODULE_DESCRIPTION("fLink PCI/PCIe module");
-MODULE_SUPPORTED_DEVICE("fLink PCI/PCIe devices");
 MODULE_LICENSE("Dual BSD/GPL");
 
 // ############ Module parameters ############

@@ -316,7 +316,6 @@ static u32 flink_eim_address_space_size(struct flink_device* fdev)
 // ####### module infos ########################################################
 
 MODULE_DESCRIPTION("flink EIM module for iMX6");
-MODULE_SUPPORTED_DEVICE("flink EIM devices");
 MODULE_VERSION(MOD_VERSION);
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Adam Bajric <adam.bajric@ntb.ch>");
