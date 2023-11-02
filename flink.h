@@ -17,7 +17,7 @@
 #include <linux/mutex.h>
 #include <linux/list.h>
 #include <linux/fs.h>
-#include "flinkinterface/ioctl/flink_ioctl.h"
+#include "flink_ioctl.h"
 
 // ################# Debugging #################
 // Uncomment it to see debugging information in the kernel log.
