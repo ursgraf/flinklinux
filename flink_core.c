@@ -20,6 +20,15 @@
  *
  *  @author Martin Züger
  *  @author Urs Graf
+ *  @author Patrick Good
+ * 
+ *  Changelog
+ *  Date      Who   What
+ *  28.10.23  Good  Added interrupt capability
+ * 					-> Added ioctl #50 #51 #52
+ * 					-> Added IRQ service routine
+ * 					-> Added flink_device_init_irq(...)
+ * 					-> Adjusted flink_device_init(...) & flink_device_delete(...)
  */
 
 #include <linux/kernel.h>
@@ -30,10 +39,11 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
+#include <linux/interrupt.h>
+#include <linux/signal.h>
 
 #include "flink.h"
 
-//#define DBG
 #define MODULE_NAME THIS_MODULE->name
 #define SYSFS_CLASS_NAME "flink"
 #define MAX_DEV_NAME_LENGTH 15
@@ -45,6 +55,10 @@ MODULE_LICENSE("Dual BSD/GPL");
 static LIST_HEAD(device_list);
 static LIST_HEAD(loaded_if_modules);
 static struct class* sysfs_class;
+
+// ###### Internal Function Prototypes ######
+// do NOT call this directly!!! this function is called over an irq number
+static irqreturn_t flink_threaded_irq_handler(int irq, void *dev_id);
 
 // ############ File operations ############
 
@@ -226,6 +240,13 @@ long flink_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
 	unsigned long rsize = 0;
 	unsigned long wsize = 0;
 	u32 temp;
+
+	// for irq register and unregister
+	struct flink_process_data* fsignal;
+	struct task_struct* user_task = get_current();
+	bool found_entry = false;
+	u32 requested_irq_nr = 0;
+	struct flink_irq_data* hwirq;
 	
 	#if defined(DBG)
 		printk(KERN_DEBUG "[%s] I/O control call...", MODULE_NAME);
@@ -595,6 +616,158 @@ long flink_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
 					return -EINVAL;
 			}
 			break;
+		case REGISTER_IRQ: 
+			#if defined(DBG)
+				printk(KERN_DEBUG "[%s] Register IRQ (0x%x)", MODULE_NAME, REGISTER_IRQ);
+			#endif
+			if(unlikely(pdata->fdev->nof_irqs == 0)) {
+				printk(KERN_WARNING "[%s] Irq functionality not available", MODULE_NAME);
+				return -EPERM;
+			}
+			error = copy_from_user(&rw_container, (void __user *)arg, sizeof(rw_container));
+			if(unlikely(error != 0)) {
+				printk(KERN_WARNING "[%s] Error while copying from userspace: %i", MODULE_NAME, error);
+				return -EINVAL;
+			}
+			if(unlikely(rw_container.size != 4)) {
+				printk(KERN_WARNING "[%s] size must have lenght of 4 bytes aka uint32_t", MODULE_NAME);
+				return -EINVAL;
+			}
+			wsize = copy_from_user(&requested_irq_nr, (void __user *)rw_container.data, sizeof(requested_irq_nr));
+			if(unlikely(wsize > 0)) {
+				printk(KERN_WARNING "[%s] Copying from user space failed: %lu bytes not copied!", MODULE_NAME, wsize);
+				return -EINVAL;
+			}
+			if(unlikely(requested_irq_nr >= pdata->fdev->nof_irqs)) {
+				printk(KERN_WARNING "[%s] IRQ number %lu is too high. Number must be between 0 and %lu", MODULE_NAME, requested_irq_nr, pdata->fdev->nof_irqs-1);
+				return -EINVAL;
+			}
+			// generate IRQ structure and link to the correct entry in the list, which is sorted by PID
+			list_for_each_entry(hwirq, &(pdata->fdev->hw_irq_data), list) {
+    			if (hwirq->irq_nr == requested_irq_nr) {
+					mutex_lock(&(hwirq->lock_for_ioctl)); // It's not allowed for two processes to read and write the list at the same time.
+        			list_for_each_entry(fsignal, &(hwirq->flink_process_data), list) {
+						if(unlikely(fsignal->user_task->pid == user_task->pid)) {
+							printk(KERN_WARNING "[%s] IRQ %lu is already registered oh the pid", MODULE_NAME, hwirq->irq_nr);
+							mutex_unlock(&(hwirq->lock_for_ioctl));
+							return -EINVAL;
+						}
+					}
+					fsignal = kzalloc(sizeof(struct flink_process_data), GFP_KERNEL);
+					if(unlikely(!fsignal)) {
+						printk(KERN_ERR "[%s] Failed to allocate memory for signal witch depends on irq %lu", MODULE_NAME, hwirq->irq_nr);
+						mutex_unlock(&(hwirq->lock_for_ioctl));
+						return -ENOMEM;
+					}
+					INIT_LIST_HEAD(&(fsignal->list));
+					fsignal->user_task = user_task;
+					hwirq->signal_nr_with_offset = pdata->fdev->signal_offset + hwirq->irq_nr;
+					
+					spin_lock_bh(&(hwirq->irq_lock));
+					list_add(&(fsignal->list), &(hwirq->flink_process_data)); // This is very critical when an IRQ is fired (IRQ reads this list and here it has been modified).
+					spin_unlock_bh(&(hwirq->irq_lock));
+					mutex_unlock(&(hwirq->lock_for_ioctl));
+
+					hwirq->signal_count++;
+					#if defined(DBG)
+						printk(KERN_DEBUG "  -> Signal %lu for process %lu registerd", hwirq->signal_nr_with_offset, user_task->pid);
+					#endif
+        			return hwirq->signal_nr_with_offset;
+				}
+			}
+			break;
+		case UNREGISTER_IRQ:
+			#if defined(DBG)
+				printk(KERN_DEBUG "[%s] Unregister IRQ (0x%x)", MODULE_NAME, UNREGISTER_IRQ);
+			#endif
+			if(unlikely(pdata->fdev->nof_irqs == 0)) {
+				printk(KERN_WARNING "[%s] Irq functionality not available", MODULE_NAME);
+				return -EPERM;
+			}
+			error = copy_from_user(&rw_container, (void __user *)arg, sizeof(rw_container));
+			if(unlikely(error != 0)) {
+				printk(KERN_WARNING "[%s] Error while copying from userspace: %i", MODULE_NAME, error);
+				return -EINVAL;
+			}
+			if(unlikely(rw_container.size != 4)) {
+				printk(KERN_WARNING "[%s] size must have lenght of 4 bytes aka uint32_t", MODULE_NAME);
+				return -EINVAL;
+			}
+			wsize = copy_from_user(&requested_irq_nr, (void __user *)rw_container.data, sizeof(requested_irq_nr));
+			if(unlikely(wsize > 0)) {
+				printk(KERN_WARNING "[%s] Copying from user space failed: %lu bytes not copied!", MODULE_NAME, wsize);
+				return -EINVAL;
+			}
+			if(unlikely(requested_irq_nr >= pdata->fdev->nof_irqs)) {
+				printk(KERN_WARNING "[%s] IRQ number %lu is too high. Number must be between 0 and %lu", MODULE_NAME, requested_irq_nr, pdata->fdev->nof_irqs-1);
+				return -EINVAL;
+			}
+			list_for_each_entry(hwirq, &(pdata->fdev->hw_irq_data), list) {
+    			if(hwirq->irq_nr == requested_irq_nr) {
+					if(unlikely(hwirq->signal_count == 0)){
+						printk(KERN_WARNING "[%s] No signal registered on the requested IRQ: %lu", MODULE_NAME, hwirq->irq_nr);
+						return -EINVAL;
+					}
+					mutex_lock(&(hwirq->lock_for_ioctl)); // It's not allowed for two processes to read and write the list at the same time.
+					found_entry = false;
+        			list_for_each_entry(fsignal, &(hwirq->flink_process_data), list) {
+						if(fsignal->user_task->pid == user_task->pid) {
+							#if defined(DBG)
+								printk(KERN_DEBUG "  -> Found list entry to remove");
+							#endif
+							found_entry = true;
+							break;
+						}
+					}
+					if(likely(found_entry)) {
+						spin_lock_bh(&(hwirq->irq_lock));
+						list_del(&(fsignal->list)); // This is very critical when an IRQ is fired (IRQ reads this list and here it has been modified).
+						spin_unlock_bh(&(hwirq->irq_lock));
+						mutex_unlock(&(hwirq->lock_for_ioctl));
+
+						if(fsignal) {
+							kfree(fsignal);
+						}
+						#if defined(DBG)
+							printk(KERN_DEBUG "  -> Signal %lu for process %lu unregisterd", hwirq->signal_nr_with_offset, user_task->pid);
+						#endif
+					} else {
+						mutex_unlock(&(hwirq->lock_for_ioctl));
+						#if defined(DBG)
+							printk(KERN_DEBUG "  -> No list entry found to remove");
+						#endif
+						return -EINVAL;
+					}
+        			break;
+				}
+			}
+			break;
+		case GET_SIGNAL_OFFSET:
+			#if defined(DBG)
+				printk(KERN_DEBUG "[%s] Get signal offset (0x%x)", MODULE_NAME, GET_SIGNAL_OFFSET);
+			#endif
+			if(unlikely(pdata->fdev->nof_irqs == 0)) {
+				printk(KERN_WARNING "[%s] Irq functionality not available", MODULE_NAME);
+				return -EPERM;
+			}
+			error = copy_from_user(&rw_container, (void __user *)arg, sizeof(rw_container));
+			if(unlikely(error != 0)) {
+				printk(KERN_WARNING "[%s] Error while copying from userspace: %i", MODULE_NAME, error);
+				return -EINVAL;
+			}
+			if(unlikely(rw_container.size != 4)) {
+				printk(KERN_WARNING "[%s] Size must have lenght of 4 bytes aka uint32_t", MODULE_NAME);
+				return -EINVAL;
+			}
+			rsize = copy_to_user((void __user *)rw_container.data, &(pdata->fdev->signal_offset), sizeof(pdata->fdev->signal_offset));
+			if(unlikely(rsize > 0)) {
+				printk(KERN_WARNING "[%s] Copying to user space failed: %lu bytes not copied!", MODULE_NAME, rsize);
+				return 0;
+			}
+			#if defined(DBG)
+				printk(KERN_DEBUG "  -> Signal offset:  0x%x", pdata->fdev->signal_offset);
+			#endif
+			return sizeof(pdata->fdev->signal_offset);
 		default:
 			#if defined(DBG)
 				printk(KERN_DEBUG "  -> Error: illegal ioctl command: 0x%x!", cmd);
@@ -653,7 +826,7 @@ static int __init flink_init(void) {
 	
 	// ---- All done ----
 	printk(KERN_INFO "[%s] Module sucessfully loaded\n", MODULE_NAME);
-	
+
 	return 0;
 
 	// ---- ERROR HANDLING ----
@@ -808,6 +981,51 @@ static unsigned int scan_for_subdevices(struct flink_device* fdev) {
 	return subdevice_counter;
 }
 
+// irq handler do not call this function directly. Only register it with request_irq()
+static irqreturn_t flink_threaded_irq_handler(int irq, void *dev_id) {
+    struct siginfo info;
+	struct flink_irq_data* irq_data = (struct flink_irq_data*)(dev_id);
+	struct flink_process_data* signal_data;
+
+	#if defined(DBG_IRQ)
+		printk(KERN_DEBUG "[%s] IRQ nr: %lu rised", MODULE_NAME, irq);
+	#endif
+
+	if (unlikely(irq != irq_data->irq_nr_with_offset)) {
+		#if defined(DBG_IRQ)
+			printk(KERN_DEBUG "  -> IRQ nr: %lu calld the wrong handler (Handler irq nr: %lu)", irq, irq_data->irq_nr_with_offset);
+		#endif
+		return IRQ_NONE;
+	}
+
+	// prepare siginfo to save time
+	memset(&info, 0, sizeof(info));
+	info.si_code = SI_QUEUE;
+	info.si_signo = irq_data->signal_nr_with_offset;
+	
+	// critical section
+	{
+		spin_lock_bh(&(irq_data->irq_lock));
+		list_for_each_entry(signal_data, &(irq_data->flink_process_data), list) {
+			if(signal_data->user_task != NULL) {
+				/* Send the signal */
+				#if defined(DBG_IRQ) 
+					int err = send_sig_info(irq_data->signal_nr_with_offset, (struct kernel_siginfo *) &info, signal_data->user_task);
+					if(err < 0) {
+						printk(KERN_WARNING "  -> Error while sending signal: %lu to userspace pid: %lu. Error nr: %lu", MODULE_NAME, irq_data->signal_nr_with_offset, signal_data->user_task->pid, err);
+					} else {
+						printk(KERN_DEBUG "  -> Successfully send signal: %lu to userspace pid: %lu", MODULE_NAME, irq_data->signal_nr_with_offset, signal_data->user_task->pid);
+					}
+				#else
+					send_sig_info(irq_data->signal_nr_with_offset, (struct kernel_siginfo *) &info, signal_data->user_task);
+				#endif
+			}
+		}
+		spin_unlock_bh(&(irq_data->irq_lock));
+	}
+	return IRQ_HANDLED;
+}
+
 /*******************************************************************
  *                                                                 *
  *  Public methods                                                 *
@@ -832,13 +1050,78 @@ struct flink_device* flink_device_alloc(void) {
  * @param bus_ops: The flink_bus_ops for this device, remember them when adding them to
  * system with flink_device_add().
  * @param mod: The kernel module this flink uses for hardware access.
+ * @deprecated This function is outdated and should no longer be used.
+ *             Use flink_device_init_irq() instead.
+ *             Set nof_irq = irq_offset = signal_offset = 0
  */
 void flink_device_init(struct flink_device* fdev, struct flink_bus_ops* bus_ops, struct module* mod) {
+	flink_device_init_irq(fdev, bus_ops, mod, 0, 0, 0);
+}
+
+/**
+ * @brief Initialize a flink_device structure
+ * @param fdev: The structure to initialize
+ * @param bus_ops: The flink_bus_ops for this device, remember them when adding them to
+ * system with flink_device_add().
+ * @param irq_ops: The flink_irq_ops for this device. This is needed when an irq gets (un)registert from userspace. Set NULL if irq not required
+ * @param mod: The kernel module this flink uses for hardware access.
+ * @param nof_irq: Number of irqs that are provided. Set 0 if irq not required
+ * @param irq_offset: The offset of the first irq number. Set 0 if irq not required
+ * @param signal_offset: The offset of the first signal that is sent to userspace. Set 0 if irq not required
+ */
+void flink_device_init_irq(struct flink_device* fdev, 
+						   struct flink_bus_ops* bus_ops, 
+						   struct module* mod, 
+						   u32 nof_irq, 
+						   u32 irq_offset, 
+						   u32 signal_offset) {
+	struct flink_irq_data* irq_data;
+	int err = 0;
+	
 	memset(fdev, 0, sizeof(*fdev));
 	INIT_LIST_HEAD(&(fdev->list));
 	INIT_LIST_HEAD(&(fdev->subdevices));
 	fdev->bus_ops = bus_ops;
 	fdev->appropriated_module = mod;
+	
+	fdev->irq_offset = irq_offset;
+	fdev->signal_offset = signal_offset;
+	fdev->nof_irqs = nof_irq;
+	INIT_LIST_HEAD(&(fdev->hw_irq_data)); // First dimension static: Second dimension dynamic
+
+	// Create the first dimension of the two-dimensional data structure "flink_irq_sorted_by_irq"
+	if(nof_irq > 0){
+		for(int i = 0; i < nof_irq; i++){
+			irq_data = kzalloc(sizeof(struct flink_irq_data), GFP_KERNEL);
+			if(unlikely(!irq_data)) {
+				printk(KERN_ERR "[%s] Failed to allocate memory for hw irq: %lu", MODULE_NAME, irq_offset + i);
+				printk(KERN_ERR "  -> Disabled IRQ functionality!!!");
+				nof_irq = 0;
+				return;
+			}
+			INIT_LIST_HEAD(&(irq_data->list));
+			INIT_LIST_HEAD(&(irq_data->flink_process_data));
+			irq_data->irq_nr = i;
+			irq_data->signal_count = 0;
+			irq_data->irq_nr_with_offset = irq_offset + i;
+			spin_lock_init(&(irq_data->irq_lock));
+			mutex_init(&(irq_data->lock_for_ioctl));
+			list_add(&(irq_data->list), &(fdev->hw_irq_data));
+
+			// register a threaded irq handler otherwise is occours a problem with the using spinlock
+			err = request_threaded_irq(irq_data->irq_nr_with_offset, NULL, flink_threaded_irq_handler, IRQF_ONESHOT, "flink IRQ Handler", (void*)(irq_data));
+			if (unlikely(err < 0)) {
+				printk(KERN_ERR "[%s] Unabel to register IRQ %lu. Error nr: %d", MODULE_NAME, irq_data->irq_nr_with_offset, err);
+				printk(KERN_ERR "  -> Disabled IRQ functionality!!!");
+				nof_irq = 0;
+				return;
+			}
+		}
+	} else {
+		#ifdef DBG
+			printk(KERN_DEBUG "[%s] Disabled IRQ functionality!!!", MODULE_NAME);
+		#endif
+	}
 }
 
 /**
@@ -897,7 +1180,7 @@ int flink_device_remove(struct flink_device* fdev) {
 
 /**
  * @brief Deletes a flink device and frees the allocated memory. All subdevices will be deleted,
- * using flink_subdevice_remove() and flink_subdevice_delete().
+ * using flink_subdevice_remove() and flink_subdevice_delete() as well as the whole irq structure.
  * @param fdev: The flink_device structure to delete. 
  * @return int: A negative error code is returned on failure.
  */
@@ -905,6 +1188,8 @@ int flink_device_delete(struct flink_device* fdev) {
 	if(fdev != NULL) {
 		struct flink_subdevice* sdev;
 		struct flink_subdevice* sdev_next;
+		struct flink_irq_data* irq_data, *irq_data_next;
+		struct flink_process_data* signal_data, *signal_data_next;
 		
 		// Remove and delete all subdevices
 		list_for_each_entry_safe(sdev, sdev_next, &(fdev->subdevices), list) {
@@ -914,7 +1199,34 @@ int flink_device_delete(struct flink_device* fdev) {
 			flink_subdevice_remove(sdev);
 			flink_subdevice_delete(sdev);
 		}
-		
+
+		// unregister irq and delete the irq related data
+		if(fdev->nof_irqs > 0) {
+			// first, unregister all IRQs to avoid using the spinlock and to avoid a null pointer error if an IRQ is fired.
+			list_for_each_entry_safe(irq_data, irq_data_next, &(fdev->hw_irq_data), list) {
+				#if defined(DBG)
+					printk(KERN_DEBUG "  -> Removing and deleting irq structure #%u (from device #%u)", irq_data->irq_nr, fdev->id);
+				#endif
+				free_irq(irq_data->irq_nr_with_offset, (void*)(irq_data));
+			}
+
+			// remove and delete irq structure with the nested signal structure
+			list_for_each_entry_safe(irq_data, irq_data_next, &(fdev->hw_irq_data), list) {
+				#if defined(DBG)
+					printk(KERN_DEBUG "  -> Removing and deleting irq structure #%u (from device #%u)", irq_data->irq_nr, fdev->id);
+				#endif
+				list_for_each_entry_safe(signal_data, signal_data_next, &(irq_data->flink_process_data), list) {
+					#if defined(DBG)
+						printk(KERN_DEBUG "  -> Removing and deleting signal structure #%u (from device #%u)", irq_data->signal_nr_with_offset, fdev->id);
+					#endif
+					list_del(&(signal_data->list));
+					if(signal_data) kfree(signal_data);
+				}
+				list_del(&(irq_data->list));
+				if(irq_data) kfree(irq_data);
+			}
+		}
+
 		// Free memory
 		kfree(fdev);
 		
@@ -1137,6 +1449,7 @@ int flink_select_subdevice(struct file* f, u8 subdevice, bool excl) {
 // ############ Let other modules do flink stuff ############
 EXPORT_SYMBOL(flink_device_alloc);
 EXPORT_SYMBOL(flink_device_init);
+EXPORT_SYMBOL(flink_device_init_irq);
 EXPORT_SYMBOL(flink_device_add);
 EXPORT_SYMBOL(flink_device_remove);
 EXPORT_SYMBOL(flink_device_delete);

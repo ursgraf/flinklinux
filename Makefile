@@ -13,10 +13,10 @@ endif
 	PWD := $(shell pwd)
 
 modules: flink_ioctl.h flink_fmi.c
-	$(CHROOT_CMD) $(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+	$(CHROOT_CMD) $(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules
 	
 modules_install:
-	$(CHROOT_CMD) $(MAKE) -C $(KERNELDIR) M=$(PWD) modules_install
+	$(CHROOT_CMD) $(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules_install
 
 clean:
 	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions modules.order Module.symvers
@@ -37,13 +37,14 @@ else
 #	EXTRA_CFLAGS += -DDEBUG
 	ccflags-y := -std=gnu99
 	obj-m := flink.o
+	obj-m += flink_axi.o
 
 ifeq ($(CONFIG_PCI),y) 
 	obj-m += flink_pci.o 
 endif
 
 ifeq ($(CONFIG_SPI),y) 
-	obj-m += flink_spi.o 
+	obj-m += flink_spi.o
 endif
 
 ifeq ($(CONFIG_PPC_MPC5200_SIMPLE),y)
@@ -53,6 +54,8 @@ endif
 ifneq ($(CONFIG_IMX_WEIM),)
 	obj-m += imx6/flink_eim.o
 endif
-
+	
 	flink-objs := flink_core.o
 endif
+
+

@@ -3,18 +3,38 @@
  *
  *  @author Martin Züger
  *  @author Urs Graf
+ *  @author Patrick Good
+ * 
+ *  Changelog
+ *  Date      Who   What
+ *  28.10.23  Good  Added struct flink_device with struct flink_irq_data and struct flink_signal_data
  */
 #ifndef FLINK_H_
 #define FLINK_H_
 
 #include <linux/types.h>
 #include <linux/spinlock_types.h>
+#include <linux/mutex.h>
 #include <linux/list.h>
 #include <linux/fs.h>
-#include "flink_ioctl.h"
+#include "flinkinterface/ioctl/flink_ioctl.h"
+
+// ################# Debugging #################
+// Uncomment it to see debugging information in the kernel log.
+//#define DBG
+
+// To also enable debugging in the IRQ service routine, uncomment define DBG_IRQ.
+// This is disabled by default, even if debugging is enabled, because the code in the ISR is very time-critical.
+#ifdef DBG
+	//#define DBG_IRQ
+#endif
 
 // ############ flink error numbers ############
 #define UNKOWN_ERROR -1
+
+// ######### For compiler optimisations #########
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
 
 // FPGA module interface types
 extern const char* fmit_lkm_lut[];
@@ -64,20 +84,51 @@ struct flink_subdevice {
 // ############ flink device ############
 /// @brief Describes a device
 struct flink_device {
-	struct list_head      list;			/// Linked list of all devices
-	u8                    id;			/// Identifies a device
-	u8                    nof_subdevices;		/// Number of subdevices
+	struct list_head      list;				/// Linked list of all devices
+	u8                    id;				/// Identifies a device
+	u8                    nof_subdevices;	/// Number of subdevices
 	struct list_head      subdevices;		/// Linked list of all subdevices of this device
 	struct flink_bus_ops* bus_ops;			/// Pointer to structure defining the bus operation functions of this device
 	struct module*        appropriated_module;	/// Pointer to bus interface modul used for this device 
 	void*                 bus_data;			/// Bus specific data
 	struct cdev*          char_device;		/// Pointer to cdev structure
 	struct device*        sysfs_device;		/// Pointer to sysfs device structure
+	struct list_head      hw_irq_data;		/// Linked list of requested IRQs
+	u32                   nof_irqs;			/// Maximum IRQ that can be registered
+	u32                   irq_offset;		/// offset for HW IRQ
+	u32                   signal_offset;	/// offset for userspace signals
+};
+
+// ############ flink irq structure (two-dimensional dynamic array) ############
+/// Some data is duplicated here to avoid searching during IRQ processing.
+/// Be very careful if you change anything inside the code if it belongs to these structures.
+/// @brief Holds all registered IRQs with the corresponding PID.
+struct flink_irq_data {
+	struct list_head	list;					/// List of all registered IRQs
+	struct list_head	flink_process_data;		/// List to process data
+	u32					irq_nr;					/// IRQ nr without offset
+	u32					signal_count;			/// Registered signals (length of flink_signal_data). if(signal_count == 0) then the IRQ isn't registered
+	u32					signal_nr_with_offset;	/// userspace signal nr
+	u32					irq_nr_with_offset;		/// Precalculated IRQ NR to save time in IRQ routine
+	spinlock_t			irq_lock;				/// Spinnlock to avoid data races between top half and ioctl call
+	struct mutex		lock_for_ioctl;			/// To avoid data races when multiple processes call ioctl to add or remove an signal.
+
+};
+/// @brief This structure is used in the IRQ handler to send the appropriate signal number to the correct userspace process.
+struct flink_process_data {
+	struct list_head	list;		/// List of all user space processes that have requested the IRQ
+	struct task_struct*	user_task;	/// User task to route IRQs per signal
 };
 
 // ############ Public functions ############
 extern struct flink_device*    flink_device_alloc(void);
 extern void                    flink_device_init(struct flink_device* fdev, struct flink_bus_ops* bus_ops, struct module* mod);
+extern void                    flink_device_init_irq(struct flink_device* fdev, 
+													 struct flink_bus_ops* bus_ops, 
+													 struct module* mod, 
+													 u32 nof_irq, 
+													 u32 irq_offset, 
+													 u32 signal_offset);
 extern int                     flink_device_add(struct flink_device* fdev);
 extern int                     flink_device_remove(struct flink_device* fdev);
 extern int                     flink_device_delete(struct flink_device* fdev);
