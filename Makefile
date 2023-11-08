@@ -12,7 +12,7 @@ endif
 
 	PWD := $(shell pwd)
 
-modules: flink_ioctl.h flink_fmi.c
+modules: flink_ioctl.h flink_fmi.c flink_funcid.h
 	$(CHROOT_CMD) $(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules
 	
 modules_install:
@@ -30,6 +30,9 @@ flink_ioctl.h: flinkinterface/ioctl/create_flink_ioctl.h.sh flinkinterface/func_
 	
 flink_fmi.c: flinkinterface/func_id/create_flink_fmi.c.sh flinkinterface/func_id/func_id_definitions.sh
 	flinkinterface/func_id/create_flink_fmi.c.sh
+
+flink_funcid.h: flinkinterface/func_id/create_flink_funcid.h.sh
+	flinkinterface/func_id/create_flink_funcid.h.sh
 
 .PHONY: modules clean
 
