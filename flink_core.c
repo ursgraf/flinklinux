@@ -639,7 +639,7 @@ long flink_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
 				return -EINVAL;
 			}
 			if(unlikely(requested_irq_nr >= pdata->fdev->nof_irqs)) {
-				printk(KERN_WARNING "[%s] IRQ number %lu is too high. Number must be between 0 and %lu", MODULE_NAME, requested_irq_nr, pdata->fdev->nof_irqs-1);
+				printk(KERN_WARNING "[%s] IRQ number %lu is too high. Number must be between 0 and %lu", MODULE_NAME, (long unsigned int)requested_irq_nr, (long unsigned int)pdata->fdev->nof_irqs-1);
 				return -EINVAL;
 			}
 			// generate IRQ structure and link to the correct entry in the list, which is sorted by PID
@@ -648,14 +648,14 @@ long flink_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
 					mutex_lock(&(hwirq->lock_for_ioctl)); // It's not allowed for two processes to read and write the list at the same time.
         			list_for_each_entry(fsignal, &(hwirq->flink_process_data), list) {
 						if(unlikely(fsignal->user_task->pid == user_task->pid)) {
-							printk(KERN_WARNING "[%s] IRQ %lu is already registered oh the pid", MODULE_NAME, hwirq->irq_nr);
+							printk(KERN_WARNING "[%s] IRQ %lu is already registered oh the pid", MODULE_NAME, (long unsigned int)hwirq->irq_nr);
 							mutex_unlock(&(hwirq->lock_for_ioctl));
 							return -EINVAL;
 						}
 					}
 					fsignal = kzalloc(sizeof(struct flink_process_data), GFP_KERNEL);
 					if(unlikely(!fsignal)) {
-						printk(KERN_ERR "[%s] Failed to allocate memory for signal witch depends on irq %lu", MODULE_NAME, hwirq->irq_nr);
+						printk(KERN_ERR "[%s] Failed to allocate memory for signal witch depends on irq %lu", MODULE_NAME, (long unsigned int)hwirq->irq_nr);
 						mutex_unlock(&(hwirq->lock_for_ioctl));
 						return -ENOMEM;
 					}
@@ -699,13 +699,13 @@ long flink_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
 				return -EINVAL;
 			}
 			if(unlikely(requested_irq_nr >= pdata->fdev->nof_irqs)) {
-				printk(KERN_WARNING "[%s] IRQ number %lu is too high. Number must be between 0 and %lu", MODULE_NAME, requested_irq_nr, pdata->fdev->nof_irqs-1);
+				printk(KERN_WARNING "[%s] IRQ number %lu is too high. Number must be between 0 and %lu", MODULE_NAME, (long unsigned int)requested_irq_nr, (long unsigned int)pdata->fdev->nof_irqs-1);
 				return -EINVAL;
 			}
 			list_for_each_entry(hwirq, &(pdata->fdev->hw_irq_data), list) {
     			if(hwirq->irq_nr == requested_irq_nr) {
 					if(unlikely(hwirq->signal_count == 0)){
-						printk(KERN_WARNING "[%s] No signal registered on the requested IRQ: %lu", MODULE_NAME, hwirq->irq_nr);
+						printk(KERN_WARNING "[%s] No signal registered on the requested IRQ: %lu", MODULE_NAME, (long unsigned int)hwirq->irq_nr);
 						return -EINVAL;
 					}
 					mutex_lock(&(hwirq->lock_for_ioctl)); // It's not allowed for two processes to read and write the list at the same time.
@@ -1094,7 +1094,7 @@ void flink_device_init_irq(struct flink_device* fdev,
 		for(int i = 0; i < nof_irq; i++){
 			irq_data = kzalloc(sizeof(struct flink_irq_data), GFP_KERNEL);
 			if(unlikely(!irq_data)) {
-				printk(KERN_ERR "[%s] Failed to allocate memory for hw irq: %lu", MODULE_NAME, irq_offset + i);
+				printk(KERN_ERR "[%s] Failed to allocate memory for hw irq: %lu", MODULE_NAME, (long unsigned int)irq_offset + i);
 				printk(KERN_ERR "  -> Disabled IRQ functionality!!!");
 				nof_irq = 0;
 				return;
@@ -1111,7 +1111,7 @@ void flink_device_init_irq(struct flink_device* fdev,
 			// register a threaded irq handler otherwise is occours a problem with the using spinlock
 			err = request_threaded_irq(irq_data->irq_nr_with_offset, NULL, flink_threaded_irq_handler, IRQF_ONESHOT, "flink IRQ Handler", (void*)(irq_data));
 			if (unlikely(err < 0)) {
-				printk(KERN_ERR "[%s] Unabel to register IRQ %lu. Error nr: %d", MODULE_NAME, irq_data->irq_nr_with_offset, err);
+				printk(KERN_ERR "[%s] Unabel to register IRQ %lu. Error nr: %d", MODULE_NAME, (long unsigned int)irq_data->irq_nr_with_offset, err);
 				printk(KERN_ERR "  -> Disabled IRQ functionality!!!");
 				nof_irq = 0;
 				return;

@@ -203,7 +203,7 @@ static int flink_axi_probe(struct platform_device *pdev)
 	u32 reg[2];
 	u32 nof_irq = 0;
     int ret = 0;
-    void __iomem *base;
+//    void __iomem *base;
     int err = 0;
     struct flink_device *fdev;
 	struct flink_axi_bus_data *bus_data;
@@ -311,7 +311,6 @@ static int flink_axi_probe(struct platform_device *pdev)
 
 
 	flink_add_failure:
-	flink_init_failure:
 		flink_device_delete(fdev);
 	fdev_alloc_failure:
 		iounmap(bus_data->base);

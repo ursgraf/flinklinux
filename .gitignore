@@ -3,10 +3,13 @@ build*/
 *.o
 *.ko
 *.mod.c
+*.mod
 *.cmd
+*.d
 Module.symvers
 modules.order
 .directory
 .tmp_versions/
 flink_ioctl.h
 flink_fmi.c
+flink_funcid.h

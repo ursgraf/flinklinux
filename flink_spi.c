@@ -163,7 +163,7 @@ static int flink_spi_probe(struct spi_device *spi) {
 	return 0;
 }
 
-static int flink_spi_remove(struct spi_device *spi) {
+static void flink_spi_remove(struct spi_device *spi) {
 	struct spi_data* spiData = spi_get_drvdata(spi);
 	struct flink_device* fdev;
 	struct flink_device* fdev_next;
@@ -187,8 +187,6 @@ static int flink_spi_remove(struct spi_device *spi) {
 	kfree(spiData->txBuf);
 	kfree(spiData->rxBuf);
 	kfree(spiData);
-
-	return 0;
 }
 
 // ############ Data structures for spi driver ############
