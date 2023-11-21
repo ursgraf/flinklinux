@@ -31,7 +31,7 @@
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
 
-#include "flink.h"
+#include "../flink.h"
 
 /* Config option (device tree or hard coded) If you want to configure 
  * this module with hard coded values, just uncomment the define below 
