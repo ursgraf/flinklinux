@@ -163,7 +163,7 @@ static int flink_spi_probe(struct spi_device *spi) {
 	return 0;
 }
 
-static void flink_spi_remove(struct spi_device *spi) {
+static int flink_spi_remove(struct spi_device *spi) {
 	struct spi_data* spiData = spi_get_drvdata(spi);
 	struct flink_device* fdev;
 	struct flink_device* fdev_next;
@@ -187,6 +187,7 @@ static void flink_spi_remove(struct spi_device *spi) {
 	kfree(spiData->txBuf);
 	kfree(spiData->rxBuf);
 	kfree(spiData);
+	return 0;
 }
 
 // ############ Data structures for spi driver ############
@@ -196,7 +197,7 @@ static struct spi_driver flink_spi_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = flink_spi_probe,
-	.remove = __exit_p(flink_spi_remove),
+	.remove = __exit_p((void*)flink_spi_remove),
 };
 
 // ############ Initialization and cleanup ############
