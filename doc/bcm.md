@@ -15,6 +15,6 @@ Every such module handles the actual bus transfer over a given hardware interfac
 
 Currently we support transfer over PCI (`flink_pci.c`) and SPI (`flink_spi.c`).
 
-For the *Phytec phyCORE-MPC5200B-I/O* board there is a driver using the local plus bus on the mpc5200 (`flink_lpb.c`). \\
-For the *Toradex Colibri* board there is a driver using the EIM bus on the imx6 (`flink_eim.c`). \\
+For the *Phytec phyCORE-MPC5200B-I/O* board there is a driver using the local plus bus on the mpc5200 (`flink_lpb.c`). //
+For the *Toradex Colibri* board there is a driver using the EIM bus on the imx6 (`flink_eim.c`). //
 For the *AVNET MicroZed* board there is a driver using the AXI bus on the zync (`flink_axi.c`).
