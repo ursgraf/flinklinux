@@ -41,6 +41,7 @@
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
 #include <linux/signal.h>
+#include <linux/sched.h>
 
 #include "flink.h"
 
